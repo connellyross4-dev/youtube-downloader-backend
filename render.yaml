@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: youtube-downloader-backend
+    runtime: docker
+    plan: free
+    branch: main
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeploy: true
