@@ -94,6 +94,12 @@ def _try_client(video_id: str, client: str) -> dict | None:
         "retries": 1,
         "extractor_args": {"youtube": {"player_client": [client]}},
     }
+    # Proxy mode only: route yt-dlp lookup traffic through the local
+    # WARP SOCKS5 proxy. Kernel mode needs no proxy option — the
+    # WireGuard interface already routes all outbound traffic.
+    proxy = os.environ.get("WARP_PROXY_URL", "")
+    if proxy:
+        opts["proxy"] = proxy
     url = f"https://www.youtube.com/watch?v={video_id}"
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -162,7 +168,11 @@ def health():
         "status": "ok",
         "service": "clipsaver-warp-lookup",
         "warp": os.environ.get("WARP_UP", "false") == "true",
+        "warp_mode": os.environ.get("WARP_MODE", "none"),
         "warp_interface": os.environ.get("WARP_INTERFACE", ""),
+        "warp_proxy": os.environ.get("WARP_PROXY_URL", ""),
+        "warp_error": os.environ.get("WARP_ERROR", ""),
+        "tun_available": os.path.exists("/dev/net/tun"),
         "egress_ip": _egress_ip(),
         "note": "warp=false means this lookup ran over the host IP, not WARP.",
     }
@@ -180,6 +190,7 @@ def lookup(body: LookupRequest):
             out["client_used"] = client
             out["clients_tried"] = tried
             out["warp"] = os.environ.get("WARP_UP", "false") == "true"
+            out["warp_mode"] = os.environ.get("WARP_MODE", "none")
             return out
     raise HTTPException(
         status_code=502,
@@ -187,5 +198,7 @@ def lookup(body: LookupRequest):
             "error": "YouTube blocked this lookup (no streamingData from WARP host)",
             "clients_tried": tried,
             "warp": os.environ.get("WARP_UP", "false") == "true",
+            "warp_mode": os.environ.get("WARP_MODE", "none"),
+            "warp_error": os.environ.get("WARP_ERROR", ""),
         },
     )

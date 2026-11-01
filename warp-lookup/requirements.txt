@@ -2,3 +2,8 @@ fastapi>=0.115
 uvicorn[standard]>=0.30
 yt-dlp>=2025.1.1
 pydantic>=2.7
+PySocks>=1.7
+# PySocks is required for yt-dlp's proxy option to actually speak
+# SOCKS5 to the warp-cli proxy. Without it, a proxy URL is silently
+# ignored or errors, and a lookup would run over the host IP while
+# /health claims proxy mode.
