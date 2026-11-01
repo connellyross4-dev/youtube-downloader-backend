@@ -84,10 +84,30 @@ if [ "${WARP_ENABLED:-1}" = "1" ]; then
   fi
 fi
 
+# PO token server (bgutil-pot, Rust, HTTP mode on 4416).
+# Started AFTER the WARP attempts, so a PO failure does not hide a
+# WARP failure, and vice versa. The app checks /ping itself in
+# /health, so a PO server failure is reported as po_up=false, not
+# as a silent lookup failure.
+export PO_UP=false
+if command -v bgutil-pot >/dev/null 2>&1; then
+  (bgutil-pot server --port 4416 >/tmp/warp/po.log 2>&1 &) || true
+  i=0
+  while [ $i -lt 10 ]; do
+    if curl -s --max-time 5 http://127.0.0.1:4416/ping >/dev/null 2>&1; then
+      export PO_UP=true
+      break
+    fi
+    sleep 3
+    i=$((i+1))
+  done
+fi
+
 # Persist status for /health (env is also passed to uvicorn below).
 printf '%s' "$WARP_UP" > /tmp/warp/status.txt
 printf '%s' "$WARP_MODE" > /tmp/warp/mode.txt
 printf '%s' "$WARP_ERROR" > /tmp/warp/error.txt
 printf '%s' "$WARP_PROXY_URL" > /tmp/warp/proxy.txt
+printf '%s' "$PO_UP" > /tmp/warp/po.txt
 
 exec uvicorn app:app --host 0.0.0.0 --port "${PORT:-8000}"

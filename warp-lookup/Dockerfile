@@ -22,6 +22,22 @@ RUN curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --dearmor -o /u
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+# PO token provider, PINNED to v0.8.1 (verified 2026-11-01: binary
+# generates a real PO token for Me at the zoo, server /ping returns
+# version 0.8.1). Do NOT use "latest" — same lesson as wgcf.
+# Binary: single file, ~49 MB, no runtime dependencies.
+# Plugin: zip with yt_dlp_plugins/extractor/getpot_bgutil*.py, the
+# HTTP provider the app calls via extractor_args youtubepot-bgutilhttp.
+RUN curl -sL https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/v0.8.1/bgutil-pot-linux-x86_64 \
+       -o /usr/local/bin/bgutil-pot \
+    && chmod +x /usr/local/bin/bgutil-pot \
+    && /usr/local/bin/bgutil-pot --help >/dev/null \
+    && mkdir -p /app/plugins \
+    && curl -sL https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/v0.8.1/bgutil-ytdlp-pot-provider-rs.zip \
+       -o /tmp/pot-plugin.zip \
+    && python3 -c "import zipfile; zipfile.ZipFile('/tmp/pot-plugin.zip').extractall('/app/plugins')" \
+    && ls /app/plugins/yt_dlp_plugins/extractor/ \
+    && rm /tmp/pot-plugin.zip
 COPY app.py entrypoint.sh ./
 RUN chmod +x entrypoint.sh
 CMD ["./entrypoint.sh"]

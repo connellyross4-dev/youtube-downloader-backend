@@ -63,10 +63,15 @@ app.add_middleware(
 )
 
 _VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
-# Order mirrors the 2026-10-31 test: ANDROID + WEB were the Worker's
-# clients; IOS and TV_EMBEDDED are the remaining fallbacks that at
-# least returned a player response shape on some clients.
-_CLIENTS = ["android", "web", "ios", "tv_embedded"]
+# PO token test 2026-11-01: bgutil-pot v0.8.1 server generates a
+# real PO token for Me at the zoo, and yt-dlp with the bgutil HTTP
+# plugin returned 24 formats locally where android/web/ios without
+# PO returned "Sign in to confirm you're not a bot". The local
+# success used yt-dlp's DEFAULT client set (after "tv_embedded" was
+# skipped as unsupported), so try default first, then single clients.
+# "tv_embedded" is NOT a valid yt-dlp player_client name — yt-dlp
+# skips it — so the correct single-client fallback is "tv".
+_CLIENTS = [None, "android", "web", "ios", "tv"]
 
 
 class LookupRequest(BaseModel):
@@ -84,7 +89,7 @@ def _video_id(body: LookupRequest) -> str:
     raise HTTPException(status_code=400, detail={"error": "no videoId"})
 
 
-def _try_client(video_id: str, client: str) -> dict | None:
+def _try_client(video_id: str, client: str | None) -> dict | None:
     opts = {
         "quiet": True,
         "no_warnings": True,
@@ -92,8 +97,24 @@ def _try_client(video_id: str, client: str) -> dict | None:
         "skip_download": True,
         "socket_timeout": 30,
         "retries": 1,
-        "extractor_args": {"youtube": {"player_client": [client]}},
+        "plugin_dirs": ["/app/plugins"],
+        "extractor_args": {
+            "youtubepot-bgutilhttp": {"base_url": ["http://127.0.0.1:4416"]},
+            # CRITICAL: without skip=hls,dash, yt-dlp returns SABR/HLS
+            # manifest URLs (manifest.googlevideo.com) as "formats".
+            # Those are playlists, not downloadable files — a visitor
+            # clicking one gets a .m3u8, not a video. Skipping them
+            # leaves only direct https videoplayback URLs, which is
+            # what the site's <a download> links actually need.
+            # Verified 2026-11-01: Me at the zoo + Big Buck Bunny both
+            # return direct video-only + audio-only with this skip,
+            # and combined=0 (YouTube no longer offers combined above
+            # 360p via this path — the site must label that honestly).
+            "youtube": {"skip": ["hls", "dash"]},
+        },
     }
+    if client is not None:
+        opts["extractor_args"]["youtube"] = {"player_client": [client]}
     # Proxy mode only: route yt-dlp lookup traffic through the local
     # WARP SOCKS5 proxy. Kernel mode needs no proxy option — the
     # WireGuard interface already routes all outbound traffic.
@@ -116,6 +137,12 @@ def _shape(info: dict) -> dict:
     for fmt in info.get("formats") or []:
         url = fmt.get("url")
         if not url:
+            continue
+        # Never serve an HLS/DASH manifest as a download, even if
+        # skip somehow let one through: manifests are not files.
+        if fmt.get("protocol") in ("m3u8", "m3u8_native", "http_dash_segments"):
+            continue
+        if "manifest.googlevideo.com" in url or "/hls_playlist/" in url:
             continue
         height = fmt.get("height") or 0
         entry = {
@@ -162,9 +189,21 @@ def _egress_ip() -> str | None:
         return None
 
 
+def _po_status() -> dict:
+    """Best-effort PO server status, never crashes health."""
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:4416/ping", timeout=5) as r:
+            import json as _json
+
+            d = _json.load(r)
+            return {"po_up": True, "po_version": d.get("version", "")}
+    except Exception as e:
+        return {"po_up": False, "po_version": "", "po_error": str(e)[:200]}
+
+
 @app.get("/health")
 def health():
-    return {
+    out = {
         "status": "ok",
         "service": "clipsaver-warp-lookup",
         "warp": os.environ.get("WARP_UP", "false") == "true",
@@ -176,6 +215,8 @@ def health():
         "egress_ip": _egress_ip(),
         "note": "warp=false means this lookup ran over the host IP, not WARP.",
     }
+    out.update(_po_status())
+    return out
 
 
 @app.post("/lookup")
@@ -183,22 +224,24 @@ def lookup(body: LookupRequest):
     video_id = _video_id(body)
     tried = []
     for client in _CLIENTS:
-        tried.append(client)
+        tried.append(client if client is not None else "default+po")
         info = _try_client(video_id, client)
         if info:
             out = _shape(info)
-            out["client_used"] = client
+            out["client_used"] = client if client is not None else "default+po"
             out["clients_tried"] = tried
             out["warp"] = os.environ.get("WARP_UP", "false") == "true"
             out["warp_mode"] = os.environ.get("WARP_MODE", "none")
+            out.update(_po_status())
             return out
     raise HTTPException(
         status_code=502,
         detail={
-            "error": "YouTube blocked this lookup (no streamingData from WARP host)",
+            "error": "YouTube blocked this lookup (no streamingData from PO host)",
             "clients_tried": tried,
             "warp": os.environ.get("WARP_UP", "false") == "true",
             "warp_mode": os.environ.get("WARP_MODE", "none"),
             "warp_error": os.environ.get("WARP_ERROR", ""),
+            "po": _po_status(),
         },
     )
