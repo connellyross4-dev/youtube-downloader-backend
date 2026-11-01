@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && curl -sL https://github.com/ViRb3/wgcf/releases/download/v2.2.22/wgcf_2.2.22_linux_amd64 \
        -o /usr/local/bin/wgcf \
     && chmod +x /usr/local/bin/wgcf \
-    && /usr/local/bin/wgcf --version
+    && /usr/local/bin/wgcf --help >/dev/null
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
